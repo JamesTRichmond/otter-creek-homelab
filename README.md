@@ -12,37 +12,50 @@ A small self-hosted lab in Vermont where my AI agents, local models, and test sa
 
 ```mermaid
 flowchart LR
-  subgraph Network["Managed network (UniFi)"]
-    A["Agent host<br/>Mac mini, Apple silicon, 48 GB<br/>local models + agent gateway"]
-    H["Hypervisor<br/>Proxmox VE"]
-    S["Sandbox VM<br/>disposable test runner"]
-    H --> S
+  L["Laptop<br/>review + merge<br/>key-only access"] -->|tasks| R
+  subgraph NET["Segmented home network"]
+    subgraph AH["Agent host · trusted"]
+      R["Relay loop<br/>bounded, redacted results"]
+      M["Local models<br/>localhost only"]
+    end
+    subgraph HV["Hypervisor · firewalled management"]
+      subgraph SB["Isolated sandbox bridge · untrusted"]
+        S["Ephemeral sandbox VMs<br/>no egress, destroyed after each run"]
+      end
+      W["Egress worker VM<br/>allowlisted outbound"]
+      C["CI runner VM"]
+      HH["Household VMs<br/>internet-only"]
+    end
   end
-  L["Laptop<br/>where I review and merge"] -->|tasks| A
-  A -->|code + tests, secrets excluded| S
-  S -->|results| A
-  A -->|PRs only| G["GitHub"]
+  R --> M
+  R -->|"code + tests, one SSH path, secrets excluded"| S
+  S -->|results| R
+  C --> G["GitHub<br/>protected main, required review"]
+  K["Scheduled health checks"] -->|failures open issues| G
 ```
 
 | Role | What it does |
 |---|---|
-| Agent host | Serves open-weight models (MLX and Ollama) and runs a persistent agent gateway |
-| Hypervisor | Proxmox VE. Holds sandbox VMs that can be thrown away and rebuilt |
-| Sandbox VM | Runs generated code and tests. It never sees my keys |
-| Network | UniFi-managed home network |
+| Agent host | Serves open-weight models (MLX and Ollama) on localhost only and runs the relay loop |
+| Hypervisor | Proxmox VE. Management is reachable only from the laptop and the agent host, SSH is key-only, and every VM is backed up nightly |
+| Sandbox VMs | Built from a hardened template with CPU, memory, and disk caps. No internet, no route to the rest of the lab, destroyed after each run. They never see my keys |
+| Egress worker | The one VM allowed outbound, and only to an allowlist |
+| CI runner | Self-hosted GitHub Actions runner in its own VM, off the hypervisor host |
+| Network | Segmented home network: fixed addresses for lab hosts, IoT and guest devices on their own segments, household VMs limited to the internet |
 
 ## Featured: the relay loop
 
 A tag-team coding loop that runs entirely on local models:
 
 1. A **builder** model writes code and tests for a task.
-2. The code goes to the sandbox VM and the tests run there under a hard timeout, enforced on the worker with a local backstop.
+2. The code goes to a fresh sandbox VM and the tests run there under a hard timeout, enforced on the worker with a local backstop.
 3. Two **reviewer** models critique the result.
 4. Repeat until the tests pass and both reviewers are clean, or the round budget runs out.
 
 What makes it trustworthy:
 
 - **Secrets never leave the host.** `.env*`, keys, `.pem` files and `.git` are excluded from every copy, and there's no agent forwarding.
+- **Sandbox output is treated as hostile.** Results are size-bounded and stripped of anything that looks like a credential before a reviewer model reads them.
 - **Infrastructure failures aren't blamed on the model.** A dropped connection, a timeout, or the wrong worker answering is retried once, then the run stops with a distinct exit code. The builder only gets a failed round for its own code.
 - **Every outcome is classified.** Pass, failing tests, timeout, no tests collected, missing dependency, nothing saved. Each lands in a per-round log.
 - **Runaway tests get killed.** A deliberately hanging test is part of the examples, and it must be killed by the worker timeout.
@@ -50,13 +63,98 @@ What makes it trustworthy:
 ## Operations
 
 - **A living runbook.** The lab's runbook is a live page that a scheduled agent sweeps every night. It folds in what changed, restores anything missing, and trims stale steps. A static runbook goes stale in a week.
-- **Guardrails on the repos agents touch.** Branch protection on main, no force pushes, linear history. Agents open PRs; I merge.
+- **Checks that fail loud.** Scheduled checks cover backups, disk, exposed ports, sandbox egress, and credential scope. Any failure opens a GitHub issue, so nothing breaks quietly.
+- **Nightly backups.** Every VM is snapshotted nightly with a rolling retention window.
+- **Guardrails on the repos agents touch.** Branch protection on main, required review, no force pushes, linear history. Agents open PRs; I merge.
 - **Incident practice.** I've already had to rotate an exposed gateway token and track down a runaway API-cost leak (wrong model tier, low cache hit rate, a chatty heartbeat).
 
-## What I'd do next
+## In progress
 
-- Infrastructure as code for the sandbox VMs, so a rebuild is one command.
-- Off-site backups with a tested restore.
-- Metrics on model throughput and loop pass rates.
+Moving from "hardened homelab" toward a lab where every trust boundary is physical, built the cheap way where the cheap way is also the right way: single-board computers, e-waste, and owned gear. Where it's headed:
+
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 30, "rankSpacing": 40}}}%%
+flowchart TB
+  subgraph ACC["Access"]
+    direction LR
+    L["Laptop<br/>hardware key,<br/>device posture"]
+    ID["Identity gateway<br/>SSO, mutual TLS"]
+    OOB["Out-of-band<br/>console<br/>break-glass path"]
+    L --> ID
+    ID ~~~ OOB
+  end
+  ACC --> NET
+  subgraph NET["Network · default deny"]
+    direction TB
+    FW["Zone firewall<br/>no inbound,<br/>egress allowlist"]
+    SW["Segmentation<br/>unknown devices<br/>quarantined"]
+    DNS["Private DNS<br/>filtered, own<br/>resolver"]
+    HOME["Household + IoT<br/>isolated,<br/>never captured"]
+  end
+  NET --> TS
+  NET -.-> SEN
+  subgraph TS["Trust services"]
+    direction TB
+    CA["Internal CA<br/>offline root,<br/>short-lived certs"]
+    V["Secrets vault<br/>hardware-backed,<br/>short-lived"]
+    MIR["Artifact mirror<br/>pinned, verified<br/>code + models"]
+  end
+  TS --> CP
+  subgraph CP["Control plane · trusted"]
+    O["Orchestrator<br/>durable state,<br/>queue"]
+    SG["Sandbox gate<br/>secrets stay out,<br/>results validated"]
+    GA["GitHub App<br/>scoped tokens,<br/>signed commits"]
+    O <--> SG
+    O ~~~ GA
+  end
+  O ---> IG
+  SG <--> S
+  subgraph IP["Inference plane · trusted"]
+    IG["Inference gateway<br/>local-only,<br/>mutual TLS"]
+    MH["Model hosts<br/>agent host +<br/>GPU node"]
+  end
+  subgraph EP["Execution plane · untrusted"]
+    S["MicroVM sandboxes<br/>no egress,<br/>single-use"]
+  end
+  EP -.-> DF
+  subgraph DF["Forensics · evidence zone"]
+    direction LR
+    ACQ["Acquisition<br/>write-blocked,<br/>hashed"]
+    EV["Evidence vault<br/>immutable,<br/>encrypted"]
+    AN["Analysis<br/>offline,<br/>read-only"]
+    ACQ --> EV --> AN
+  end
+  subgraph DET["Detection + recovery"]
+    SEN["Sensors<br/>IDS tap,<br/>canaries"]
+    SIEM["SIEM<br/>tamper-evident<br/>logs, paging"]
+    OPS["Ops agent<br/>read-only checks,<br/>opens issues"]
+    BK["Backups<br/>encrypted, pulled,<br/>immutable off-site"]
+    SEN --> SIEM
+    OPS ~~~ BK
+  end
+  SIEM ~~~ LR
+  subgraph RNG["Practice range · air-gapped, logs out one-way"]
+    LR["Lab router<br/>own network,<br/>no uplink"]
+    ATK["Attack box +<br/>vulnerable<br/>targets"]
+    HW["Hardware bench<br/>serial, USB, RF"]
+    LR --> ATK
+    LR --> HW
+  end
+```
+
+- **Dedicated hardware per plane.** Orchestration, inference, and execution on separate machines, so untrusted code never shares a host with anything that holds state or credentials.
+- **Default-deny network.** Managed switching with per-plane segments behind a zone firewall, unknown devices quarantined on arrival, and a mirror port feeding intrusion-detection sensors and canary services that page when touched.
+- **Private DNS.** A filtering resolver doing its own recursion on a single-board computer, so lookups stay in the lab and ads, trackers, and known-bad domains die at the edge.
+- **Trust services.** An internal certificate authority with an offline root issuing short-lived certs, a secrets vault backed by a hardware key, and an internal artifact mirror so builds install pinned, hash-verified packages and models instead of reaching for the internet.
+- **A real control plane.** An orchestrator with durable state and a queue, a sandbox gate that keeps secrets out and validates results on the way back, and a scoped GitHub App in place of personal tokens.
+- **An inference gateway.** One front door for every model, local-only with mutual TLS, plus a GPU node for models too large for the agent host.
+- **MicroVM sandboxes.** Faster, smaller throwaway runners behind the sandbox gate.
+- **An air-gapped practice range.** A lab router with no uplink fencing the attack box, deliberately vulnerable targets, and a hardware bench (serial, USB, RF — powered by a recycled ATX supply), with logs leaving one-way only.
+- **A forensics pipeline with chain of custody.** Write-blocked, hashed acquisition — retired phones and e-waste drives are the practice corpus — into an immutable encrypted evidence vault, analyzed offline.
+- **Access done right.** Hardware-key sign-in with device posture checks, and an out-of-band console as the break-glass path for when the network itself is down.
+- **Observability.** A SIEM with tamper-evident logs and paging, fed by the sensors and the range; an ops agent that runs read-only checks and opens issues when something fails.
+- **3-2-1 backups.** Pull-based so a compromised host can't reach them, encrypted, with an immutable off-site copy, automated restore tests, and battery backup for the rack.
+- **Ephemeral CI.** A fresh runner per job, gone when the job ends.
+- **Infrastructure as code** for the sandbox VMs, so a rebuild is one command.
 
 — [James Richmond](https://github.com/JamesTRichmond)
