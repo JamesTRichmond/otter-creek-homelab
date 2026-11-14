@@ -32,6 +32,19 @@ flowchart LR
   S -->|results| R
   C --> G["GitHub<br/>protected main, required review"]
   K["Scheduled health checks"] -->|failures open issues| G
+  classDef trusted fill:#5B54C7,stroke:#403A96,color:#FFFFFF
+  classDef untrusted fill:#C3512C,stroke:#93391C,color:#FFFFFF
+  classDef ops fill:#15866B,stroke:#0C6450,color:#FFFFFF
+  classDef neutral fill:#646C76,stroke:#4B535C,color:#FFFFFF
+  class R,M trusted
+  class S,W,C untrusted
+  class K ops
+  class L,HH,G neutral
+  style NET fill:transparent,stroke:#768390
+  style HV fill:transparent,stroke:#768390
+  style AH fill:transparent,stroke:#7A73D6
+  style SB fill:transparent,stroke:#D46A42
+  linkStyle default stroke:#768390,stroke-width:1.5px
 ```
 
 | Role | What it does |
@@ -140,6 +153,24 @@ flowchart TB
     LR --> ATK
     LR --> HW
   end
+  classDef trusted fill:#5B54C7,stroke:#403A96,color:#FFFFFF
+  classDef untrusted fill:#C3512C,stroke:#93391C,color:#FFFFFF
+  classDef evidence fill:#15866B,stroke:#0C6450,color:#FFFFFF
+  classDef neutral fill:#646C76,stroke:#4B535C,color:#FFFFFF
+  class CA,V,MIR,O,SG,GA,IG,MH trusted
+  class S,LR,ATK,HW untrusted
+  class SEN,SIEM,OPS,BK,ACQ,EV,AN evidence
+  class L,ID,OOB,FW,SW,DNS,HOME neutral
+  style ACC fill:transparent,stroke:#768390
+  style NET fill:transparent,stroke:#768390
+  style TS fill:transparent,stroke:#7A73D6
+  style CP fill:transparent,stroke:#7A73D6
+  style IP fill:transparent,stroke:#7A73D6
+  style EP fill:transparent,stroke:#D46A42
+  style RNG fill:transparent,stroke:#D46A42
+  style DET fill:transparent,stroke:#2FA183
+  style DF fill:transparent,stroke:#2FA183
+  linkStyle default stroke:#768390,stroke-width:1.5px
 ```
 
 - **Dedicated hardware per plane.** Orchestration, inference, and execution on separate machines, so untrusted code never shares a host with anything that holds state or credentials.
